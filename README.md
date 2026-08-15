@@ -1,6 +1,6 @@
 # Awake
 
-Awake keeps this Mac running when its lid is closed. You control it from Raycast.
+Awake keeps this Mac running when its lid is closed, since existing menu bar apps and extensions like Coffee in Raycast don't actually do this properly and will let your computer go to system sleep.
 
 You can keep the Mac awake indefinitely or choose a time from 10 minutes to 12 hours. Awake restores normal sleep when the time ends, when you choose Bed, or when the battery reaches 20% while the Mac is unplugged.
 
