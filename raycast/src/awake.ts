@@ -1,9 +1,9 @@
 import { showHUD } from '@raycast/api';
 
-import { readKeepDisplayOnPreference, refreshMenu, startAwake } from './helper';
+import { refreshMenu, startAwake } from './helper';
 
 export default async function command() {
-  await startAwake(null, await readKeepDisplayOnPreference());
+  await startAwake(null);
   await refreshMenu();
   await showHUD('Awake');
 }

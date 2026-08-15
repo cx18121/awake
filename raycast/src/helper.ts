@@ -1,13 +1,11 @@
 import { execFile } from 'node:child_process';
-import { launchCommand, LaunchType, LocalStorage } from '@raycast/api';
+import { launchCommand, LaunchType } from '@raycast/api';
 
 const helperPath = '/Library/PrivilegedHelperTools/dev.herdr.AgentAwakeHelper';
 const batteryFloor = 20;
-const keepDisplayOnKey = 'keep-display-on';
 
 export type AwakeStatus = {
   active: boolean;
-  batteryLevel: number | null;
   durationSeconds: number | null;
   remainingSeconds: number | null;
   keepDisplayOn: boolean;
@@ -39,7 +37,6 @@ const parseStatus = (value: unknown): AwakeStatus | null => {
   }
 
   const active = 'active' in value ? value.active : undefined;
-  const batteryLevel = 'batteryLevel' in value ? value.batteryLevel : null;
   const durationSeconds =
     'durationSeconds' in value ? value.durationSeconds : null;
   const remainingSeconds =
@@ -49,7 +46,6 @@ const parseStatus = (value: unknown): AwakeStatus | null => {
 
   if (
     typeof active !== 'boolean' ||
-    !isNullableNumber(batteryLevel) ||
     !isNullableNumber(durationSeconds) ||
     !isNullableNumber(remainingSeconds) ||
     typeof keepDisplayOn !== 'boolean'
@@ -59,7 +55,6 @@ const parseStatus = (value: unknown): AwakeStatus | null => {
 
   return {
     active,
-    batteryLevel,
     durationSeconds,
     remainingSeconds,
     keepDisplayOn,
@@ -77,27 +72,11 @@ export const readStatus = async () => {
   return status;
 };
 
-export const startAwake = (
-  durationSeconds: number | null,
-  keepDisplayOn = false
-) =>
-  runHelper([
-    'start',
-    String(durationSeconds ?? 0),
-    String(batteryFloor),
-    keepDisplayOn ? '1' : '0',
-  ]);
+export const startAwake = (durationSeconds: number | null) =>
+  runHelper(['start', String(durationSeconds ?? 0), String(batteryFloor)]);
 
-export const readKeepDisplayOnPreference = async () =>
-  (await LocalStorage.getItem<boolean>(keepDisplayOnKey)) ?? false;
-
-export const setKeepDisplayOn = async (keepDisplayOn: boolean) => {
-  await runHelper(['display', keepDisplayOn ? '1' : '0']);
-  await LocalStorage.setItem(keepDisplayOnKey, keepDisplayOn);
-};
-
-export const setKeepDisplayOnPreference = (keepDisplayOn: boolean) =>
-  LocalStorage.setItem(keepDisplayOnKey, keepDisplayOn);
+export const setKeepDisplayOn = (keepDisplayOn: boolean) =>
+  runHelper(['display', keepDisplayOn ? '1' : '0']);
 
 export const stopAwake = () => runHelper(['stop']);
 

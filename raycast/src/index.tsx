@@ -11,10 +11,8 @@ import { useEffect, useState } from 'react';
 
 import {
   type AwakeStatus,
-  readKeepDisplayOnPreference,
   readStatus,
   setKeepDisplayOn,
-  setKeepDisplayOnPreference,
   startAwake,
   stopAwake,
 } from './helper';
@@ -51,11 +49,8 @@ const formatDuration = (totalSeconds: number) => {
 
 export default function Command() {
   const statusQuery = usePromise(readStatus);
-  const displayPreferenceQuery = usePromise(readKeepDisplayOnPreference);
   const status = statusQuery.data;
-  const keepDisplayOn = status?.active
-    ? status.keepDisplayOn
-    : (displayPreferenceQuery.data ?? false);
+  const keepDisplayOn = status?.keepDisplayOn ?? false;
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -101,10 +96,9 @@ export default function Command() {
         : `${formatDuration(remainingSeconds)} left`;
   const inactiveStatus: AwakeStatus = {
     active: false,
-    batteryLevel: status?.batteryLevel ?? null,
     durationSeconds: null,
     remainingSeconds: null,
-    keepDisplayOn: false,
+    keepDisplayOn,
     observedAt: Date.now(),
   };
 
@@ -138,7 +132,6 @@ export default function Command() {
       status?.active && status.durationSeconds === durationSeconds;
     const activeStatus: AwakeStatus = {
       active: true,
-      batteryLevel: status?.batteryLevel ?? null,
       durationSeconds,
       remainingSeconds: durationSeconds,
       keepDisplayOn,
@@ -154,23 +147,18 @@ export default function Command() {
         ? 'Awake indefinitely'
         : `Awake for ${durationTitle.toLowerCase()}`
     );
-    await run(startAwake(durationSeconds, keepDisplayOn), activeStatus);
+    await run(startAwake(durationSeconds), activeStatus);
   };
 
   const toggleDisplay = async () => {
     const nextValue = !keepDisplayOn;
     try {
-      if (status?.active) {
-        await statusQuery.mutate(setKeepDisplayOn(nextValue), {
-          optimisticUpdate: (currentStatus) =>
-            currentStatus
-              ? { ...currentStatus, keepDisplayOn: nextValue }
-              : currentStatus,
-        });
-      } else {
-        await setKeepDisplayOnPreference(nextValue);
-      }
-      await displayPreferenceQuery.revalidate();
+      await statusQuery.mutate(setKeepDisplayOn(nextValue), {
+        optimisticUpdate: (currentStatus) =>
+          currentStatus
+            ? { ...currentStatus, keepDisplayOn: nextValue }
+            : currentStatus,
+      });
       await showHUD(nextValue ? 'Display stays on' : 'Display sleeps normally');
     } catch (error) {
       await showToast({

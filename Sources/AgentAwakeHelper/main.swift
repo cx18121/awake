@@ -4,18 +4,21 @@ import Foundation
 private let statePath = "/var/db/agent-awake/state.json"
 private let stateDirectory = "/var/db/agent-awake"
 private let ownershipMarkerPath = "/var/db/agent-awake/owns-sleep-override"
+private let displayPreferencePath = "/var/db/agent-awake/keep-display-on"
 private let lockPath = "/var/run/agent-awake.lock"
 
+private enum SessionLimit: Codable {
+  case indefinite
+  case timed(durationSeconds: Int, deadline: Date)
+}
+
 private struct State: Codable {
-  let durationSeconds: Int?
-  let deadline: Date?
+  let limit: SessionLimit
   let batteryFloor: Int
-  let keepDisplayOn: Bool
 }
 
 private struct Status: Encodable {
   let active: Bool
-  let batteryLevel: Int?
   let durationSeconds: Int?
   let remainingSeconds: Int?
   let keepDisplayOn: Bool
@@ -48,7 +51,6 @@ private enum HelperError: LocalizedError {
   case stateDiscarded
   case unownedSleepOverride
   case batteryUnavailable
-  case inactiveSession
 
   var errorDescription: String? {
     switch self {
@@ -68,9 +70,34 @@ private enum HelperError: LocalizedError {
       "System sleep is disabled by another process. Awake will not change it."
     case .batteryUnavailable:
       "Awake could not read the current battery level."
-    case .inactiveSession:
-      "Start Awake before changing its display setting."
     }
+  }
+}
+
+private final class DisplayAssertion {
+  private var process: Process?
+
+  func setEnabled(_ enabled: Bool) throws {
+    guard enabled else {
+      stop()
+      return
+    }
+    guard process?.isRunning != true else {
+      return
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+    process.arguments = ["-d", "-w", String(getpid())]
+    try process.run()
+    self.process = process
+  }
+
+  func stop() {
+    if process?.isRunning == true {
+      process?.terminate()
+    }
+    process = nil
   }
 }
 
@@ -145,6 +172,25 @@ private func writeOwnershipMarker() throws {
     [.posixPermissions: 0o600], ofItemAtPath: ownershipMarkerPath)
 }
 
+private func displayPreferenceIsEnabled() -> Bool {
+  FileManager.default.fileExists(atPath: displayPreferencePath)
+}
+
+private func setDisplayPreference(_ enabled: Bool) throws {
+  if enabled {
+    try FileManager.default.createDirectory(
+      atPath: stateDirectory,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o755]
+    )
+    try Data().write(to: URL(fileURLWithPath: displayPreferencePath), options: .atomic)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o644], ofItemAtPath: displayPreferencePath)
+  } else if FileManager.default.fileExists(atPath: displayPreferencePath) {
+    try FileManager.default.removeItem(atPath: displayPreferencePath)
+  }
+}
+
 private func removeOwnershipMarker() throws {
   guard FileManager.default.fileExists(atPath: ownershipMarkerPath) else {
     return
@@ -214,10 +260,7 @@ private func reconcileSession() throws -> SessionSnapshot {
   }
 }
 
-private func start(duration: Int, batteryFloor: Int, keepDisplayOn: Bool) throws {
-  guard geteuid() == 0 else {
-    throw HelperError.notRoot
-  }
+private func start(duration: Int, batteryFloor: Int) throws {
   guard duration == 0 || (60...43200).contains(duration), (5...50).contains(batteryFloor) else {
     throw HelperError.invalidArguments
   }
@@ -234,14 +277,14 @@ private func start(duration: Int, batteryFloor: Int, keepDisplayOn: Bool) throws
       case .inactive, .recovered:
         false
       }
-    let durationSeconds = duration == 0 ? nil : duration
-    let deadline = durationSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
-    let state = State(
-      durationSeconds: durationSeconds,
-      deadline: deadline,
-      batteryFloor: batteryFloor,
-      keepDisplayOn: keepDisplayOn
-    )
+    let limit: SessionLimit =
+      duration == 0
+      ? .indefinite
+      : .timed(
+        durationSeconds: duration,
+        deadline: Date().addingTimeInterval(TimeInterval(duration))
+      )
+    let state = State(limit: limit, batteryFloor: batteryFloor)
     do {
       if !alreadyDisabled && !ownsSleepOverride() {
         try writeOwnershipMarker()
@@ -258,27 +301,12 @@ private func start(duration: Int, batteryFloor: Int, keepDisplayOn: Bool) throws
 }
 
 private func setKeepDisplayOn(_ keepDisplayOn: Bool) throws {
-  guard geteuid() == 0 else {
-    throw HelperError.notRoot
-  }
   try withLock {
-    guard case .active(let state) = try reconcileSession() else {
-      throw HelperError.inactiveSession
-    }
-    try writeState(
-      State(
-        durationSeconds: state.durationSeconds,
-        deadline: state.deadline,
-        batteryFloor: state.batteryFloor,
-        keepDisplayOn: keepDisplayOn
-      ))
+    try setDisplayPreference(keepDisplayOn)
   }
 }
 
 private func stop() throws {
-  guard geteuid() == 0 else {
-    throw HelperError.notRoot
-  }
   try withLock {
     do {
       if case .active = try reconcileSession() {
@@ -293,25 +321,27 @@ private func stop() throws {
 
 private func currentStatus() throws -> Status {
   try withLock {
+    let keepDisplayOn = displayPreferenceIsEnabled()
     switch try reconcileSession() {
     case .inactive:
       return Status(
         active: false,
-        batteryLevel: try batteryState().level,
         durationSeconds: nil,
         remainingSeconds: nil,
-        keepDisplayOn: false
+        keepDisplayOn: keepDisplayOn
       )
     case .active(let state):
-      let remaining = state.deadline.map {
-        max(0, Int($0.timeIntervalSinceNow.rounded(.down)))
+      let (durationSeconds, remainingSeconds): (Int?, Int?) = switch state.limit {
+      case .indefinite:
+        (nil, nil)
+      case .timed(let durationSeconds, let deadline):
+        (durationSeconds, max(0, Int(deadline.timeIntervalSinceNow.rounded(.down))))
       }
       return Status(
         active: true,
-        batteryLevel: try batteryState().level,
-        durationSeconds: state.durationSeconds,
-        remainingSeconds: remaining,
-        keepDisplayOn: state.keepDisplayOn
+        durationSeconds: durationSeconds,
+        remainingSeconds: remainingSeconds,
+        keepDisplayOn: keepDisplayOn
       )
     case .externalOverride:
       throw HelperError.unownedSleepOverride
@@ -322,51 +352,32 @@ private func currentStatus() throws -> Status {
 }
 
 private func monitor() throws -> Never {
-  guard geteuid() == 0 else {
-    throw HelperError.notRoot
-  }
-  var displayAssertion: Process?
+  let displayAssertion = DisplayAssertion()
+  defer { displayAssertion.stop() }
+
   while true {
     try withLock {
       do {
         guard case .active(let state) = try reconcileSession() else {
-          if displayAssertion?.isRunning == true {
-            displayAssertion?.terminate()
-          }
-          displayAssertion = nil
+          displayAssertion.stop()
           return
         }
-        if state.keepDisplayOn {
-          if displayAssertion?.isRunning != true {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-            process.arguments = ["-d", "-w", String(getpid())]
-            try process.run()
-            displayAssertion = process
-          }
-        } else {
-          if displayAssertion?.isRunning == true {
-            displayAssertion?.terminate()
-          }
-          displayAssertion = nil
-        }
+        try displayAssertion.setEnabled(displayPreferenceIsEnabled())
         let battery = try batteryState()
         let batteryReachedFloor = battery.isOnBattery && battery.level <= state.batteryFloor
-        let deadlineReached = state.deadline.map { Date() >= $0 } ?? false
+        let deadlineReached = switch state.limit {
+        case .indefinite:
+          false
+        case .timed(_, let deadline):
+          Date() >= deadline
+        }
         let shouldStop = deadlineReached || batteryReachedFloor
         if shouldStop {
           try restoreSession()
-          if displayAssertion?.isRunning == true {
-            displayAssertion?.terminate()
-          }
-          displayAssertion = nil
+          displayAssertion.stop()
         }
       } catch {
         try restoreSession()
-        if displayAssertion?.isRunning == true {
-          displayAssertion?.terminate()
-        }
-        displayAssertion = nil
         throw error
       }
     }
@@ -375,6 +386,9 @@ private func monitor() throws -> Never {
 }
 
 private func execute() throws {
+  guard geteuid() == 0 else {
+    throw HelperError.notRoot
+  }
   let arguments = Array(CommandLine.arguments.dropFirst())
   guard let command = arguments.first else {
     throw HelperError.invalidArguments
@@ -383,19 +397,13 @@ private func execute() throws {
   switch command {
   case "start":
     guard
-      arguments.count == 4,
+      arguments.count == 3,
       let duration = Int(arguments[1]),
-      let batteryFloor = Int(arguments[2]),
-      let keepDisplayOn = Int(arguments[3]),
-      keepDisplayOn == 0 || keepDisplayOn == 1
+      let batteryFloor = Int(arguments[2])
     else {
       throw HelperError.invalidArguments
     }
-    try start(
-      duration: duration,
-      batteryFloor: batteryFloor,
-      keepDisplayOn: keepDisplayOn == 1
-    )
+    try start(duration: duration, batteryFloor: batteryFloor)
   case "display":
     guard
       arguments.count == 2,
