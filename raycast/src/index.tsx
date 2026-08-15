@@ -152,14 +152,34 @@ export default function Command() {
 
   const toggleDisplay = async () => {
     const nextValue = !keepDisplayOn;
+    const shouldStartAwake = nextValue && !status?.active;
+    const action = shouldStartAwake
+      ? startAwake(null).then(() => setKeepDisplayOn(true))
+      : setKeepDisplayOn(nextValue);
     try {
-      await statusQuery.mutate(setKeepDisplayOn(nextValue), {
+      await statusQuery.mutate(action, {
         optimisticUpdate: (currentStatus) =>
           currentStatus
-            ? { ...currentStatus, keepDisplayOn: nextValue }
+            ? {
+                ...currentStatus,
+                active: shouldStartAwake || currentStatus.active,
+                durationSeconds: shouldStartAwake
+                  ? null
+                  : currentStatus.durationSeconds,
+                remainingSeconds: shouldStartAwake
+                  ? null
+                  : currentStatus.remainingSeconds,
+                keepDisplayOn: nextValue,
+              }
             : currentStatus,
       });
-      await showHUD(nextValue ? 'Display stays on' : 'Display sleeps normally');
+      await showHUD(
+        shouldStartAwake
+          ? 'Awake indefinitely · display stays on'
+          : nextValue
+            ? 'Display stays on'
+            : 'Display sleeps normally'
+      );
     } catch (error) {
       await showToast({
         style: Toast.Style.Failure,
