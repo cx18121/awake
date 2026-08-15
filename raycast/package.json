@@ -1,0 +1,50 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "awake",
+  "title": "Awake",
+  "description": "Keep this Mac awake with its lid closed",
+  "icon": "extension-icon.png",
+  "author": "charliexue",
+  "categories": [
+    "System"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "awake",
+      "title": "Awake",
+      "description": "Keep this Mac awake until you choose Bed",
+      "mode": "no-view"
+    },
+    {
+      "name": "bed",
+      "title": "Bed",
+      "description": "Restore normal sleep",
+      "mode": "no-view"
+    },
+    {
+      "name": "index",
+      "title": "Awake Menu Bar",
+      "description": "Control Awake from the menu bar",
+      "mode": "menu-bar",
+      "interval": "1m"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.102.5",
+    "@raycast/utils": "^2.3.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "22.18.6",
+    "eslint": "^9.35.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix"
+  }
+}
