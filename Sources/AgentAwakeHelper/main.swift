@@ -1,11 +1,25 @@
 import Darwin
+import Dispatch
 import Foundation
 
 private let statePath = "/var/db/agent-awake/state.json"
 private let stateDirectory = "/var/db/agent-awake"
 private let ownershipMarkerPath = "/var/db/agent-awake/owns-sleep-override"
-private let displayPreferencePath = "/var/db/agent-awake/keep-display-on"
 private let lockPath = "/var/run/agent-awake.lock"
+
+private enum AwakeMode: String, Codable {
+  case screen
+  case agents
+  case everything
+
+  var keepsDisplayOn: Bool {
+    self == .screen || self == .everything
+  }
+
+  var keepsMacAwake: Bool {
+    self == .agents || self == .everything
+  }
+}
 
 private enum SessionLimit: Codable {
   case indefinite
@@ -13,15 +27,16 @@ private enum SessionLimit: Codable {
 }
 
 private struct State: Codable {
+  let mode: AwakeMode
   let limit: SessionLimit
   let batteryFloor: Int
 }
 
 private struct Status: Encodable {
   let active: Bool
+  let mode: AwakeMode?
   let durationSeconds: Int?
   let remainingSeconds: Int?
-  let keepDisplayOn: Bool
 }
 
 private struct BatteryState {
@@ -172,25 +187,6 @@ private func writeOwnershipMarker() throws {
     [.posixPermissions: 0o600], ofItemAtPath: ownershipMarkerPath)
 }
 
-private func displayPreferenceIsEnabled() -> Bool {
-  FileManager.default.fileExists(atPath: displayPreferencePath)
-}
-
-private func setDisplayPreference(_ enabled: Bool) throws {
-  if enabled {
-    try FileManager.default.createDirectory(
-      atPath: stateDirectory,
-      withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o755]
-    )
-    try Data().write(to: URL(fileURLWithPath: displayPreferencePath), options: .atomic)
-    try FileManager.default.setAttributes(
-      [.posixPermissions: 0o644], ofItemAtPath: displayPreferencePath)
-  } else if FileManager.default.fileExists(atPath: displayPreferencePath) {
-    try FileManager.default.removeItem(atPath: displayPreferencePath)
-  }
-}
-
 private func removeOwnershipMarker() throws {
   guard FileManager.default.fileExists(atPath: ownershipMarkerPath) else {
     return
@@ -212,6 +208,11 @@ private func removeState() throws {
 private func sleepIsDisabled() throws -> Bool {
   let output = try run("/usr/bin/pmset", ["-g"])
   return output.range(of: #"SleepDisabled\s+1"#, options: .regularExpression) != nil
+}
+
+private func refreshMonitor() throws {
+  _ = try run(
+    "/bin/launchctl", ["kill", "SIGUSR1", "system/dev.herdr.AgentAwakeHelper"])
 }
 
 private func batteryState() throws -> BatteryState {
@@ -238,45 +239,59 @@ private func reconcileSession() throws -> SessionSnapshot {
   let ownsOverride = ownsSleepOverride()
   let disabled = try sleepIsDisabled()
 
-  switch (stateFile, ownsOverride, disabled) {
-  case (.valid(let state), _, true):
-    return .active(state)
-  case (.valid, true, false):
-    try restoreSession()
-    return .recovered(.stateRecovered)
-  case (.valid, false, false):
+  switch stateFile {
+  case .valid(let state):
+    if !state.mode.keepsMacAwake {
+      if ownsOverride {
+        try restoreSession()
+        return .recovered(.stateRecovered)
+      }
+      return .active(state)
+    }
+    if disabled {
+      return .active(state)
+    }
+    if ownsOverride {
+      try restoreSession()
+      return .recovered(.stateRecovered)
+    }
     try removeState()
     return .inactive
-  case (.missing, true, _), (.unreadable, true, _):
-    try restoreSession()
-    return .recovered(.stateRecovered)
-  case (.unreadable, false, _):
+  case .missing:
+    if ownsOverride {
+      try restoreSession()
+      return .recovered(.stateRecovered)
+    }
+    return disabled ? .externalOverride : .inactive
+  case .unreadable:
+    if ownsOverride {
+      try restoreSession()
+      return .recovered(.stateRecovered)
+    }
     try removeState()
     return .recovered(.stateDiscarded)
-  case (.missing, false, true):
-    return .externalOverride
-  case (.missing, false, false):
-    return .inactive
   }
 }
 
-private func start(duration: Int, batteryFloor: Int) throws {
+private func start(mode: AwakeMode, duration: Int, batteryFloor: Int) throws {
   guard duration == 0 || (60...43200).contains(duration), (5...50).contains(batteryFloor) else {
     throw HelperError.invalidArguments
   }
 
   try withLock {
     let snapshot = try reconcileSession()
-    if case .recovered(let error) = snapshot {
+    switch snapshot {
+    case .inactive:
+      break
+    case .active:
+      try restoreSession()
+    case .externalOverride:
+      throw HelperError.unownedSleepOverride
+    case .recovered(let error):
       throw error
     }
-    let alreadyDisabled =
-      switch snapshot {
-      case .active, .externalOverride:
-        true
-      case .inactive, .recovered:
-        false
-      }
+
+    let sleepAlreadyDisabled = try sleepIsDisabled()
     let limit: SessionLimit =
       duration == 0
       ? .indefinite
@@ -284,13 +299,13 @@ private func start(duration: Int, batteryFloor: Int) throws {
         durationSeconds: duration,
         deadline: Date().addingTimeInterval(TimeInterval(duration))
       )
-    let state = State(limit: limit, batteryFloor: batteryFloor)
+    let state = State(mode: mode, limit: limit, batteryFloor: batteryFloor)
     do {
-      if !alreadyDisabled && !ownsSleepOverride() {
+      if mode.keepsMacAwake && !sleepAlreadyDisabled {
         try writeOwnershipMarker()
       }
       try writeState(state)
-      if !alreadyDisabled {
+      if mode.keepsMacAwake && !sleepAlreadyDisabled {
         _ = try run("/usr/bin/pmset", ["-a", "disablesleep", "1"])
       }
     } catch {
@@ -298,12 +313,7 @@ private func start(duration: Int, batteryFloor: Int) throws {
       throw error
     }
   }
-}
-
-private func setKeepDisplayOn(_ keepDisplayOn: Bool) throws {
-  try withLock {
-    try setDisplayPreference(keepDisplayOn)
-  }
+  try refreshMonitor()
 }
 
 private func stop() throws {
@@ -317,31 +327,32 @@ private func stop() throws {
       throw error
     }
   }
+  try refreshMonitor()
 }
 
 private func currentStatus() throws -> Status {
   try withLock {
-    let keepDisplayOn = displayPreferenceIsEnabled()
     switch try reconcileSession() {
     case .inactive:
       return Status(
         active: false,
+        mode: nil,
         durationSeconds: nil,
-        remainingSeconds: nil,
-        keepDisplayOn: keepDisplayOn
+        remainingSeconds: nil
       )
     case .active(let state):
-      let (durationSeconds, remainingSeconds): (Int?, Int?) = switch state.limit {
-      case .indefinite:
-        (nil, nil)
-      case .timed(let durationSeconds, let deadline):
-        (durationSeconds, max(0, Int(deadline.timeIntervalSinceNow.rounded(.down))))
-      }
+      let (durationSeconds, remainingSeconds): (Int?, Int?) =
+        switch state.limit {
+        case .indefinite:
+          (nil, nil)
+        case .timed(let durationSeconds, let deadline):
+          (durationSeconds, max(0, Int(deadline.timeIntervalSinceNow.rounded(.down))))
+        }
       return Status(
         active: true,
+        mode: state.mode,
         durationSeconds: durationSeconds,
-        remainingSeconds: remainingSeconds,
-        keepDisplayOn: keepDisplayOn
+        remainingSeconds: remainingSeconds
       )
     case .externalOverride:
       throw HelperError.unownedSleepOverride
@@ -353,7 +364,17 @@ private func currentStatus() throws -> Status {
 
 private func monitor() throws -> Never {
   let displayAssertion = DisplayAssertion()
-  defer { displayAssertion.stop() }
+  let wakeSemaphore = DispatchSemaphore(value: 0)
+  signal(SIGUSR1, SIG_IGN)
+  let wakeSource = DispatchSource.makeSignalSource(signal: SIGUSR1)
+  wakeSource.setEventHandler {
+    wakeSemaphore.signal()
+  }
+  wakeSource.resume()
+  defer {
+    wakeSource.cancel()
+    displayAssertion.stop()
+  }
 
   while true {
     try withLock {
@@ -362,15 +383,16 @@ private func monitor() throws -> Never {
           displayAssertion.stop()
           return
         }
-        try displayAssertion.setEnabled(displayPreferenceIsEnabled())
+        try displayAssertion.setEnabled(state.mode.keepsDisplayOn)
         let battery = try batteryState()
         let batteryReachedFloor = battery.isOnBattery && battery.level <= state.batteryFloor
-        let deadlineReached = switch state.limit {
-        case .indefinite:
-          false
-        case .timed(_, let deadline):
-          Date() >= deadline
-        }
+        let deadlineReached =
+          switch state.limit {
+          case .indefinite:
+            false
+          case .timed(_, let deadline):
+            Date() >= deadline
+          }
         let shouldStop = deadlineReached || batteryReachedFloor
         if shouldStop {
           try restoreSession()
@@ -381,7 +403,7 @@ private func monitor() throws -> Never {
         throw error
       }
     }
-    sleep(10)
+    _ = wakeSemaphore.wait(timeout: .now() + 10)
   }
 }
 
@@ -397,22 +419,14 @@ private func execute() throws {
   switch command {
   case "start":
     guard
-      arguments.count == 3,
-      let duration = Int(arguments[1]),
-      let batteryFloor = Int(arguments[2])
+      arguments.count == 4,
+      let mode = AwakeMode(rawValue: arguments[1]),
+      let duration = Int(arguments[2]),
+      let batteryFloor = Int(arguments[3])
     else {
       throw HelperError.invalidArguments
     }
-    try start(duration: duration, batteryFloor: batteryFloor)
-  case "display":
-    guard
-      arguments.count == 2,
-      let keepDisplayOn = Int(arguments[1]),
-      keepDisplayOn == 0 || keepDisplayOn == 1
-    else {
-      throw HelperError.invalidArguments
-    }
-    try setKeepDisplayOn(keepDisplayOn == 1)
+    try start(mode: mode, duration: duration, batteryFloor: batteryFloor)
   case "stop":
     guard arguments.count == 1 else {
       throw HelperError.invalidArguments

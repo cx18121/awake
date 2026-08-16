@@ -39,7 +39,7 @@ if [[ ! "$account_name" =~ '^[a-zA-Z0-9._-]+$' ]]; then
     exit 1
 fi
 
-sudoers_line="$account_name ALL=(root) NOPASSWD: $helper_target start *, $helper_target display *, $helper_target stop, $helper_target status"
+sudoers_line="$account_name ALL=(root) NOPASSWD: $helper_target start *, $helper_target stop, $helper_target status"
 cp "$helper_source" "$helper_stage"
 cp "$project_dir/Resources/dev.herdr.AgentAwakeHelper.plist" "$daemon_stage"
 printf '%s\n' "$sudoers_line" > "$sudoers_stage"

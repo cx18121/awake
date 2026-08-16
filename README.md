@@ -1,10 +1,17 @@
 # Awake
 
-A raycast extension that keeps your Mac running when its lid is closed, since existing menu bar apps and extensions like coffee in raycast don't actually do this properly and will let your computer go to system sleep. 
+Awake gives you clear control over when your Mac and its display can sleep.
 
-You can keep the Mac awake indefinitely or choose a time from 10 minutes to 12 hours. normal sleep is restored when the time ends, when you choose ```bed```, or when the battery reaches 20% while the Mac is unplugged.
+The menu has four modes:
 
-`Keep Display On` optionally prevents the display from sleeping while Awake is active, and closing the lid still turns off the internal display.
+- `Sleep Normally` lets the display and Mac sleep normally.
+- `Keep Screen On` keeps the display on while the lid is open. The Mac sleeps when you close the lid.
+- `Keep Agents Running` lets the display turn off, but keeps the Mac running when you close the lid.
+- `Keep Everything On` keeps the display on while the lid is open and keeps the Mac running when you close the lid.
+
+The three keep awake modes can run indefinitely or for a set time from 10 minutes to 12 hours. Awake returns to normal sleep when the time ends, when you choose `Sleep Normally`, or when the battery reaches 20% while the Mac is unplugged.
+
+The internal display always turns off when you close the lid.
 
 ## Install
 
@@ -17,7 +24,7 @@ swift build -c release
 scripts/install-helper.sh
 ```
 
-The helper install asks for your Mac password once. It installs a small background service and a narrow permission rule that lets the Raycast extension start and stop Awake.
+The helper install asks for your Mac password once. It installs a small background service and a narrow permission rule that lets the Raycast extension control sleep.
 
 Then load the Raycast extension:
 
@@ -27,7 +34,7 @@ npm install
 npm run dev
 ```
 
-Raycast adds three commands. Run `Awake Menu Bar` to show the menu bar control. `Awake` starts an indefinite session. `Bed` restores normal sleep.
+Raycast adds three commands. Run `Awake Menu Bar` to show the menu bar control. `Keep Agents Running` starts that mode indefinitely. `Sleep Normally` ends the active mode.
 
 ## Remove
 

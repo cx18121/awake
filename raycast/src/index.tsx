@@ -10,9 +10,9 @@ import { usePromise } from '@raycast/utils';
 import { useEffect, useState } from 'react';
 
 import {
+  type AwakeMode,
   type AwakeStatus,
   readStatus,
-  setKeepDisplayOn,
   startAwake,
   stopAwake,
 } from './helper';
@@ -27,6 +27,32 @@ const durations = [
   { title: '8 Hours', seconds: 28_800 },
   { title: '12 Hours', seconds: 43_200 },
 ];
+
+const modes = [
+  {
+    mode: 'screen',
+    title: 'Keep Screen On',
+    description: 'Sleeps when the lid closes',
+    icon: Icon.Sun,
+  },
+  {
+    mode: 'agents',
+    title: 'Keep Agents Running',
+    description: 'Works with the lid closed; screen may turn off',
+    icon: Icon.Terminal,
+  },
+  {
+    mode: 'everything',
+    title: 'Keep Everything On',
+    description: 'Screen stays on while open; works with the lid closed',
+    icon: Icon.Bolt,
+  },
+] satisfies {
+  mode: AwakeMode;
+  title: string;
+  description: string;
+  icon: Icon;
+}[];
 
 const errorMessage = (error: unknown) =>
   error instanceof Error
@@ -50,7 +76,6 @@ const formatDuration = (totalSeconds: number) => {
 export default function Command() {
   const statusQuery = usePromise(readStatus);
   const status = statusQuery.data;
-  const keepDisplayOn = status?.keepDisplayOn ?? false;
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -94,22 +119,26 @@ export default function Command() {
       : remainingSeconds === 0
         ? 'Ending…'
         : `${formatDuration(remainingSeconds)} left`;
+  const activeMode = status?.active ? status.mode : null;
+  const activeModeOption = modes.find(({ mode }) => mode === activeMode);
   const inactiveStatus: AwakeStatus = {
     active: false,
+    mode: null,
     durationSeconds: null,
     remainingSeconds: null,
-    keepDisplayOn,
     observedAt: Date.now(),
   };
 
   const run = async (
     action: Promise<string>,
-    optimisticStatus: AwakeStatus
+    optimisticStatus: AwakeStatus,
+    successMessage: string
   ) => {
     try {
       await statusQuery.mutate(action, {
         optimisticUpdate: () => optimisticStatus,
       });
+      await showHUD(successMessage);
     } catch (error) {
       await showToast({
         style: Toast.Style.Failure,
@@ -119,74 +148,27 @@ export default function Command() {
     }
   };
 
-  const goToBed = async () => {
-    await showHUD('Bed');
-    await run(stopAwake(), inactiveStatus);
-  };
+  const sleepNormally = () =>
+    run(stopAwake(), inactiveStatus, 'Sleeping normally');
 
-  const selectDuration = async (
+  const selectMode = async (
+    mode: AwakeMode,
+    modeTitle: string,
     durationSeconds: number | null,
     durationTitle: string
   ) => {
-    const isSelected =
-      status?.active && status.durationSeconds === durationSeconds;
     const activeStatus: AwakeStatus = {
       active: true,
+      mode,
       durationSeconds,
       remainingSeconds: durationSeconds,
-      keepDisplayOn,
       observedAt: Date.now(),
     };
-    if (isSelected) {
-      await goToBed();
-      return;
-    }
-
-    await showHUD(
+    const successMessage =
       durationSeconds === null
-        ? 'Awake indefinitely'
-        : `Awake for ${durationTitle.toLowerCase()}`
-    );
-    await run(startAwake(durationSeconds), activeStatus);
-  };
-
-  const toggleDisplay = async () => {
-    const nextValue = !keepDisplayOn;
-    const shouldStartAwake = nextValue && !status?.active;
-    const action = shouldStartAwake
-      ? startAwake(null).then(() => setKeepDisplayOn(true))
-      : setKeepDisplayOn(nextValue);
-    try {
-      await statusQuery.mutate(action, {
-        optimisticUpdate: (currentStatus) =>
-          currentStatus
-            ? {
-                ...currentStatus,
-                active: shouldStartAwake || currentStatus.active,
-                durationSeconds: shouldStartAwake
-                  ? null
-                  : currentStatus.durationSeconds,
-                remainingSeconds: shouldStartAwake
-                  ? null
-                  : currentStatus.remainingSeconds,
-                keepDisplayOn: nextValue,
-              }
-            : currentStatus,
-      });
-      await showHUD(
-        shouldStartAwake
-          ? 'Awake indefinitely · display stays on'
-          : nextValue
-            ? 'Display stays on'
-            : 'Display sleeps normally'
-      );
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: 'Awake could not change the display setting',
-        message: errorMessage(error),
-      });
-    }
+        ? `${modeTitle} indefinitely`
+        : `${modeTitle} for ${durationTitle.toLowerCase()}`;
+    await run(startAwake(mode, durationSeconds), activeStatus, successMessage);
   };
 
   return (
@@ -194,19 +176,20 @@ export default function Command() {
       icon={
         statusQuery.error
           ? Icon.Warning
-          : status?.active
-            ? Icon.Bolt
-            : { source: 'bed.svg', tintColor: Color.PrimaryText }
+          : activeModeOption?.icon ?? {
+              source: 'bed.svg',
+              tintColor: Color.PrimaryText,
+            }
       }
       isLoading={statusQuery.isLoading}
       tooltip={
         statusQuery.error
           ? 'Awake unavailable'
-          : status?.active
+          : activeModeOption
             ? remainingLabel
-              ? `Awake · ${remainingLabel}`
-              : 'Awake'
-            : 'Bed'
+              ? `${activeModeOption.title} · ${remainingLabel}`
+              : activeModeOption.title
+            : 'Sleeping Normally'
       }
     >
       {statusQuery.isLoading ? null : (
@@ -217,34 +200,51 @@ export default function Command() {
               icon={Icon.Warning}
             />
           ) : null}
-          {status?.active ? (
-            <MenuBarExtra.Item title="Bed" onAction={goToBed} />
-          ) : null}
+          <MenuBarExtra.Item
+            title="Sleep Normally"
+            subtitle="Display and Mac sleep normally"
+            icon={status?.active === false ? Icon.Checkmark : undefined}
+            onAction={sleepNormally}
+          />
           <MenuBarExtra.Section>
-            {durations.map((duration) => {
-              const isSelected =
-                status?.active && status.durationSeconds === duration.seconds;
-              return (
-                <MenuBarExtra.Item
-                  key={duration.title}
-                  title={duration.title}
-                  subtitle={
-                    isSelected ? (remainingLabel ?? undefined) : undefined
-                  }
-                  icon={isSelected ? Icon.Checkmark : undefined}
-                  onAction={() =>
-                    selectDuration(duration.seconds, duration.title)
-                  }
-                />
-              );
-            })}
-          </MenuBarExtra.Section>
-          <MenuBarExtra.Section>
-            <MenuBarExtra.Item
-              title="Keep Display On"
-              icon={keepDisplayOn ? Icon.Checkmark : undefined}
-              onAction={toggleDisplay}
-            />
+            {modes.map((modeOption) => (
+              <MenuBarExtra.Submenu
+                key={modeOption.mode}
+                title={modeOption.title}
+                icon={
+                  activeMode === modeOption.mode
+                    ? Icon.Checkmark
+                    : modeOption.icon
+                }
+              >
+                <MenuBarExtra.Item title={modeOption.description} />
+                <MenuBarExtra.Section>
+                  {durations.map((duration) => {
+                    const isSelected =
+                      activeMode === modeOption.mode &&
+                      status?.durationSeconds === duration.seconds;
+                    return (
+                      <MenuBarExtra.Item
+                        key={duration.title}
+                        title={duration.title}
+                        subtitle={
+                          isSelected ? (remainingLabel ?? undefined) : undefined
+                        }
+                        icon={isSelected ? Icon.Checkmark : undefined}
+                        onAction={() =>
+                          selectMode(
+                            modeOption.mode,
+                            modeOption.title,
+                            duration.seconds,
+                            duration.title
+                          )
+                        }
+                      />
+                    );
+                  })}
+                </MenuBarExtra.Section>
+              </MenuBarExtra.Submenu>
+            ))}
           </MenuBarExtra.Section>
         </>
       )}
