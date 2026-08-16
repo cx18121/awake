@@ -103,7 +103,7 @@ private final class DisplayAssertion {
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
-    process.arguments = ["-d", "-w", String(getpid())]
+    process.arguments = ["-d", "-i", "-w", String(getpid())]
     try process.run()
     self.process = process
   }
