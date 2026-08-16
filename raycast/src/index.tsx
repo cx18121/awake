@@ -7,7 +7,6 @@ import {
   Toast,
 } from '@raycast/api';
 import { usePromise } from '@raycast/utils';
-import { useEffect, useState } from 'react';
 
 import {
   type AwakeMode,
@@ -76,34 +75,6 @@ const formatDuration = (totalSeconds: number) => {
 export default function Command() {
   const statusQuery = usePromise(readStatus);
   const status = statusQuery.data;
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (!status?.active || status.remainingSeconds === null) {
-      return;
-    }
-
-    const timer = setInterval(() => setTick((tick) => tick + 1), 60_000);
-    return () => clearInterval(timer);
-  }, [status?.active, status?.observedAt, status?.remainingSeconds]);
-
-  useEffect(() => {
-    if (!status?.active || status.remainingSeconds === null) {
-      return;
-    }
-
-    const expiresAt = status.observedAt + status.remainingSeconds * 1000;
-    const timer = setTimeout(
-      () => void statusQuery.revalidate(),
-      Math.max(0, expiresAt - Date.now() + 10_500)
-    );
-    return () => clearTimeout(timer);
-  }, [
-    status?.active,
-    status?.observedAt,
-    status?.remainingSeconds,
-    statusQuery.revalidate,
-  ]);
 
   const remainingSeconds =
     status?.remainingSeconds === null || status?.remainingSeconds === undefined
