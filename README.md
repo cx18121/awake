@@ -1,6 +1,6 @@
 # Awake
 
-Awake gives you clear control over when your Mac and its display can sleep.
+Awake gives you clear control over when your Mac and its display can sleep, and lets you keep agents running properly unlike other apps and extensions like the raycast extension coffee.
 
 The menu has four modes:
 
@@ -10,8 +10,6 @@ The menu has four modes:
 - `Keep Everything On` keeps the display on while the lid is open and keeps the Mac running when you close the lid.
 
 The three keep awake modes can run indefinitely or for a set time from 10 minutes to 12 hours. Awake returns to normal sleep when the time ends, when you choose `Sleep Normally`, or when the battery reaches 20% while the Mac is unplugged.
-
-The internal display always turns off when you close the lid.
 
 ## Install
 
