@@ -8,13 +8,7 @@ import {
 } from '@raycast/api';
 import { usePromise } from '@raycast/utils';
 
-import {
-  type AwakeMode,
-  type AwakeStatus,
-  readStatus,
-  startAwake,
-  stopAwake,
-} from './helper';
+import { type AwakeMode, readStatus, startAwake, stopAwake } from './helper';
 
 const durations = [
   { title: 'Indefinitely', seconds: null },
@@ -92,23 +86,9 @@ export default function Command() {
         : `${formatDuration(remainingSeconds)} left`;
   const activeMode = status?.active ? status.mode : null;
   const activeModeOption = modes.find(({ mode }) => mode === activeMode);
-  const inactiveStatus: AwakeStatus = {
-    active: false,
-    mode: null,
-    durationSeconds: null,
-    remainingSeconds: null,
-    observedAt: Date.now(),
-  };
-
-  const run = async (
-    action: Promise<string>,
-    optimisticStatus: AwakeStatus,
-    successMessage: string
-  ) => {
+  const run = async (action: Promise<string>, successMessage: string) => {
     try {
-      await statusQuery.mutate(action, {
-        optimisticUpdate: () => optimisticStatus,
-      });
+      await action;
       await showHUD(successMessage);
     } catch (error) {
       await showToast({
@@ -119,8 +99,7 @@ export default function Command() {
     }
   };
 
-  const sleepNormally = () =>
-    run(stopAwake(), inactiveStatus, 'Sleeping normally');
+  const sleepNormally = () => run(stopAwake(), 'Sleeping normally');
 
   const selectMode = async (
     mode: AwakeMode,
@@ -128,18 +107,11 @@ export default function Command() {
     durationSeconds: number | null,
     durationTitle: string
   ) => {
-    const activeStatus: AwakeStatus = {
-      active: true,
-      mode,
-      durationSeconds,
-      remainingSeconds: durationSeconds,
-      observedAt: Date.now(),
-    };
     const successMessage =
       durationSeconds === null
         ? `${modeTitle} indefinitely`
         : `${modeTitle} for ${durationTitle.toLowerCase()}`;
-    await run(startAwake(mode, durationSeconds), activeStatus, successMessage);
+    await run(startAwake(mode, durationSeconds), successMessage);
   };
 
   return (
