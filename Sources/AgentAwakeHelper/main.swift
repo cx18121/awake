@@ -6,6 +6,7 @@ private let statePath = "/var/db/agent-awake/state.json"
 private let stateDirectory = "/var/db/agent-awake"
 private let ownershipMarkerPath = "/var/db/agent-awake/owns-sleep-override"
 private let lockPath = "/var/run/agent-awake.lock"
+private let batteryFloor = 20
 
 private enum AwakeMode: String, Codable {
   case screen
@@ -24,12 +25,20 @@ private enum AwakeMode: String, Codable {
 private enum SessionLimit: Codable {
   case indefinite
   case timed(durationSeconds: Int, deadline: Date)
+
+  var isExpired: Bool {
+    switch self {
+    case .indefinite:
+      false
+    case .timed(_, let deadline):
+      Date() >= deadline
+    }
+  }
 }
 
 private struct State: Codable {
   let mode: AwakeMode
   let limit: SessionLimit
-  let batteryFloor: Int
 }
 
 private struct Status: Encodable {
@@ -65,7 +74,7 @@ private enum HelperError: LocalizedError {
   case stateRecovered
   case stateDiscarded
   case unownedSleepOverride
-  case batteryUnavailable
+  case lowBattery
 
   var errorDescription: String? {
     switch self {
@@ -83,8 +92,8 @@ private enum HelperError: LocalizedError {
       "Awake found invalid state and ended its session without changing another sleep override."
     case .unownedSleepOverride:
       "System sleep is disabled by another process. Awake will not change it."
-    case .batteryUnavailable:
-      "Awake could not read the current battery level."
+    case .lowBattery:
+      "Awake cannot start while the battery is at or below 20%."
     }
   }
 }
@@ -210,18 +219,30 @@ private func sleepIsDisabled() throws -> Bool {
   return output.range(of: #"SleepDisabled\s+1"#, options: .regularExpression) != nil
 }
 
+private func report(_ error: Error) {
+  FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+}
+
 private func refreshMonitor() throws {
   _ = try run(
     "/bin/launchctl", ["kill", "SIGUSR1", "system/dev.herdr.AgentAwakeHelper"])
 }
 
-private func batteryState() throws -> BatteryState {
-  let output = try run("/usr/bin/pmset", ["-g", "batt"])
-  guard let range = output.range(of: #"\d+%"#, options: .regularExpression) else {
-    throw HelperError.batteryUnavailable
+private func notifyMonitor() {
+  do {
+    try refreshMonitor()
+  } catch {
+    report(error)
   }
-  guard let level = Int(output[range].dropLast()) else {
-    throw HelperError.batteryUnavailable
+}
+
+private func batteryState() throws -> BatteryState? {
+  let output = try run("/usr/bin/pmset", ["-g", "batt"])
+  guard
+    let range = output.range(of: #"\d+%"#, options: .regularExpression),
+    let level = Int(output[range].dropLast())
+  else {
+    return nil
   }
   return BatteryState(level: level, isOnBattery: output.contains("Battery Power"))
 }
@@ -241,6 +262,10 @@ private func reconcileSession() throws -> SessionSnapshot {
 
   switch stateFile {
   case .valid(let state):
+    if state.limit.isExpired {
+      try restoreSession()
+      return .inactive
+    }
     if !state.mode.keepsMacAwake {
       if ownsOverride {
         try restoreSession()
@@ -248,15 +273,14 @@ private func reconcileSession() throws -> SessionSnapshot {
       }
       return .active(state)
     }
-    if disabled {
-      return .active(state)
+    guard ownsOverride else {
+      try removeState()
+      return disabled ? .externalOverride : .recovered(.stateDiscarded)
     }
-    if ownsOverride {
-      try restoreSession()
-      return .recovered(.stateRecovered)
+    if !disabled {
+      _ = try run("/usr/bin/pmset", ["-a", "disablesleep", "1"])
     }
-    try removeState()
-    return .inactive
+    return .active(state)
   case .missing:
     if ownsOverride {
       try restoreSession()
@@ -273,25 +297,36 @@ private func reconcileSession() throws -> SessionSnapshot {
   }
 }
 
-private func start(mode: AwakeMode, duration: Int, batteryFloor: Int) throws {
-  guard duration == 0 || (60...43200).contains(duration), (5...50).contains(batteryFloor) else {
+private func start(mode: AwakeMode, duration: Int) throws {
+  guard duration == 0 || (60...43200).contains(duration) else {
     throw HelperError.invalidArguments
   }
+  if let battery = try batteryState(), battery.isOnBattery && battery.level <= batteryFloor {
+    throw HelperError.lowBattery
+  }
+  try refreshMonitor()
 
   try withLock {
     let snapshot = try reconcileSession()
+    let sleepAlreadyDisabled = try sleepIsDisabled()
+    if mode.keepsMacAwake && sleepAlreadyDisabled && !ownsSleepOverride() {
+      throw HelperError.unownedSleepOverride
+    }
     switch snapshot {
     case .inactive:
       break
+    case .active(let state) where state.mode.keepsMacAwake == mode.keepsMacAwake:
+      break
     case .active:
       try restoreSession()
+    case .externalOverride where !mode.keepsMacAwake:
+      break
     case .externalOverride:
       throw HelperError.unownedSleepOverride
     case .recovered(let error):
       throw error
     }
 
-    let sleepAlreadyDisabled = try sleepIsDisabled()
     let limit: SessionLimit =
       duration == 0
       ? .indefinite
@@ -299,7 +334,7 @@ private func start(mode: AwakeMode, duration: Int, batteryFloor: Int) throws {
         durationSeconds: duration,
         deadline: Date().addingTimeInterval(TimeInterval(duration))
       )
-    let state = State(mode: mode, limit: limit, batteryFloor: batteryFloor)
+    let state = State(mode: mode, limit: limit)
     do {
       if mode.keepsMacAwake && !sleepAlreadyDisabled {
         try writeOwnershipMarker()
@@ -313,7 +348,7 @@ private func start(mode: AwakeMode, duration: Int, batteryFloor: Int) throws {
       throw error
     }
   }
-  try refreshMonitor()
+  notifyMonitor()
 }
 
 private func stop() throws {
@@ -327,7 +362,7 @@ private func stop() throws {
       throw error
     }
   }
-  try refreshMonitor()
+  notifyMonitor()
 }
 
 private func currentStatus() throws -> Status {
@@ -377,31 +412,23 @@ private func monitor() throws -> Never {
   }
 
   while true {
-    try withLock {
-      do {
+    do {
+      try withLock {
         guard case .active(let state) = try reconcileSession() else {
           displayAssertion.stop()
           return
         }
         try displayAssertion.setEnabled(state.mode.keepsDisplayOn)
         let battery = try batteryState()
-        let batteryReachedFloor = battery.isOnBattery && battery.level <= state.batteryFloor
-        let deadlineReached =
-          switch state.limit {
-          case .indefinite:
-            false
-          case .timed(_, let deadline):
-            Date() >= deadline
-          }
-        let shouldStop = deadlineReached || batteryReachedFloor
-        if shouldStop {
+        let batteryReachedFloor =
+          battery.map { $0.isOnBattery && $0.level <= batteryFloor } ?? false
+        if state.limit.isExpired || batteryReachedFloor {
           try restoreSession()
           displayAssertion.stop()
         }
-      } catch {
-        try restoreSession()
-        throw error
       }
+    } catch {
+      report(error)
     }
     _ = wakeSemaphore.wait(timeout: .now() + 10)
   }
@@ -419,14 +446,13 @@ private func execute() throws {
   switch command {
   case "start":
     guard
-      arguments.count == 4,
+      arguments.count == 3,
       let mode = AwakeMode(rawValue: arguments[1]),
-      let duration = Int(arguments[2]),
-      let batteryFloor = Int(arguments[3])
+      let duration = Int(arguments[2])
     else {
       throw HelperError.invalidArguments
     }
-    try start(mode: mode, duration: duration, batteryFloor: batteryFloor)
+    try start(mode: mode, duration: duration)
   case "stop":
     guard arguments.count == 1 else {
       throw HelperError.invalidArguments
@@ -451,6 +477,6 @@ private func execute() throws {
 do {
   try execute()
 } catch {
-  FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+  report(error)
   exit(EXIT_FAILURE)
 }

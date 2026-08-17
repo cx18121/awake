@@ -2,7 +2,6 @@ import { execFile } from 'node:child_process';
 import { launchCommand, LaunchType } from '@raycast/api';
 
 const helperPath = '/Library/PrivilegedHelperTools/dev.herdr.AgentAwakeHelper';
-const batteryFloor = 20;
 
 export type AwakeMode = 'screen' | 'agents' | 'everything';
 
@@ -11,7 +10,6 @@ export type AwakeStatus = {
   mode: AwakeMode | null;
   durationSeconds: number | null;
   remainingSeconds: number | null;
-  observedAt: number;
 };
 
 const runHelper = (arguments_: string[]) =>
@@ -65,7 +63,6 @@ const parseStatus = (value: unknown): AwakeStatus | null => {
     mode,
     durationSeconds,
     remainingSeconds,
-    observedAt: Date.now(),
   };
 };
 
@@ -83,19 +80,11 @@ export const startAwake = (
   mode: AwakeMode,
   durationSeconds: number | null
 ) =>
-  runHelper([
-    'start',
-    mode,
-    String(durationSeconds ?? 0),
-    String(batteryFloor),
-  ]);
+  runHelper(['start', mode, String(durationSeconds ?? 0)]);
 
 export const stopAwake = () => runHelper(['stop']);
 
-export const refreshMenu = async () => {
-  try {
-    await launchCommand({ name: 'index', type: LaunchType.Background });
-  } catch {
-    return;
-  }
-};
+export const refreshMenu = () =>
+  launchCommand({ name: 'index', type: LaunchType.Background }).catch(
+    () => undefined
+  );

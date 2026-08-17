@@ -18,6 +18,8 @@ sudo rm -f \
     /Library/LaunchDaemons/dev.herdr.AgentAwakeHelper.plist \
     /Library/PrivilegedHelperTools/dev.herdr.AgentAwakeHelper \
     /etc/sudoers.d/agent-awake \
-    /var/db/agent-awake/keep-display-on
+    /var/db/agent-awake/keep-display-on \
+    /var/db/agent-awake/state.json \
+    /var/db/agent-awake/owns-sleep-override
 sudo rmdir /var/db/agent-awake 2>/dev/null || true
 echo "Removed Awake and restored normal sleep."

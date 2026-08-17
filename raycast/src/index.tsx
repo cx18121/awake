@@ -56,28 +56,20 @@ const formatDuration = (totalSeconds: number) => {
   const totalMinutes = Math.ceil(totalSeconds / 60);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  const parts = [
-    { amount: hours, unit: 'h' },
-    { amount: minutes, unit: 'm' },
-  ]
-    .filter(({ amount }) => amount > 0)
-    .map(({ amount, unit }) => `${amount}${unit}`);
-
-  return parts.length > 0 ? parts.join(' ') : '0m';
+  if (hours === 0) {
+    return `${minutes}m`;
+  }
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${minutes}m`;
 };
 
 export default function Command() {
   const statusQuery = usePromise(readStatus);
   const status = statusQuery.data;
 
-  const remainingSeconds =
-    status?.remainingSeconds === null || status?.remainingSeconds === undefined
-      ? null
-      : Math.max(
-          0,
-          status.remainingSeconds -
-            Math.floor((Date.now() - status.observedAt) / 1000)
-        );
+  const remainingSeconds = status?.remainingSeconds ?? null;
   const remainingLabel =
     remainingSeconds === null
       ? null
@@ -86,9 +78,23 @@ export default function Command() {
         : `${formatDuration(remainingSeconds)} left`;
   const activeMode = status?.active ? status.mode : null;
   const activeModeOption = modes.find(({ mode }) => mode === activeMode);
-  const run = async (action: Promise<string>, successMessage: string) => {
+
+  const run = async (
+    action: Promise<string>,
+    mode: AwakeMode | null,
+    durationSeconds: number | null,
+    successMessage: string
+  ) => {
     try {
-      await action;
+      await statusQuery.mutate(action, {
+        optimisticUpdate: () => ({
+          active: mode !== null,
+          mode,
+          durationSeconds,
+          remainingSeconds: durationSeconds,
+        }),
+        shouldRevalidateAfter: false,
+      });
       await showHUD(successMessage);
     } catch (error) {
       await showToast({
@@ -99,7 +105,8 @@ export default function Command() {
     }
   };
 
-  const sleepNormally = () => run(stopAwake(), 'Sleeping normally');
+  const sleepNormally = () =>
+    run(stopAwake(), null, null, 'Sleeping normally');
 
   const selectMode = async (
     mode: AwakeMode,
@@ -111,7 +118,12 @@ export default function Command() {
       durationSeconds === null
         ? `${modeTitle} indefinitely`
         : `${modeTitle} for ${durationTitle.toLowerCase()}`;
-    await run(startAwake(mode, durationSeconds), successMessage);
+    await run(
+      startAwake(mode, durationSeconds),
+      mode,
+      durationSeconds,
+      successMessage
+    );
   };
 
   return (
