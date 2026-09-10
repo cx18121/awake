@@ -1,11 +1,4 @@
-import {
-  Color,
-  Icon,
-  MenuBarExtra,
-  showHUD,
-  showToast,
-  Toast,
-} from '@raycast/api';
+import { Color, Icon, MenuBarExtra, showHUD } from '@raycast/api';
 import { usePromise } from '@raycast/utils';
 
 import { type AwakeMode, readStatus, startAwake, stopAwake } from './helper';
@@ -83,7 +76,7 @@ export default function Command() {
     action: Promise<string>,
     mode: AwakeMode | null,
     durationSeconds: number | null,
-    successMessage: string
+    successMessage: string,
   ) => {
     try {
       await statusQuery.mutate(action, {
@@ -97,22 +90,17 @@ export default function Command() {
       });
       await showHUD(successMessage);
     } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: 'Awake could not change the sleep setting',
-        message: errorMessage(error),
-      });
+      await showHUD(`Awake failed: ${errorMessage(error)}`);
     }
   };
 
-  const sleepNormally = () =>
-    run(stopAwake(), null, null, 'Sleeping normally');
+  const sleepNormally = () => run(stopAwake(), null, null, 'Sleeping normally');
 
   const selectMode = async (
     mode: AwakeMode,
     modeTitle: string,
     durationSeconds: number | null,
-    durationTitle: string
+    durationTitle: string,
   ) => {
     const successMessage =
       durationSeconds === null
@@ -122,7 +110,7 @@ export default function Command() {
       startAwake(mode, durationSeconds),
       mode,
       durationSeconds,
-      successMessage
+      successMessage,
     );
   };
 
@@ -131,10 +119,10 @@ export default function Command() {
       icon={
         statusQuery.error
           ? Icon.Warning
-          : activeModeOption?.icon ?? {
+          : (activeModeOption?.icon ?? {
               source: 'bed.svg',
               tintColor: Color.PrimaryText,
-            }
+            })
       }
       isLoading={statusQuery.isLoading}
       tooltip={
@@ -191,7 +179,7 @@ export default function Command() {
                             modeOption.mode,
                             modeOption.title,
                             duration.seconds,
-                            duration.title
+                            duration.title,
                           )
                         }
                       />

@@ -24,7 +24,7 @@ const runHelper = (arguments_: string[]) =>
         }
 
         resolve(stdout.trim());
-      }
+      },
     );
   });
 
@@ -76,15 +76,12 @@ export const readStatus = async () => {
   return status;
 };
 
-export const startAwake = (
-  mode: AwakeMode,
-  durationSeconds: number | null
-) =>
+export const startAwake = (mode: AwakeMode, durationSeconds: number | null) =>
   runHelper(['start', mode, String(durationSeconds ?? 0)]);
 
 export const stopAwake = () => runHelper(['stop']);
 
 export const refreshMenu = () =>
   launchCommand({ name: 'index', type: LaunchType.Background }).catch(
-    () => undefined
+    () => undefined,
   );
