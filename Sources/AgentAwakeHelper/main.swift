@@ -75,6 +75,7 @@ private enum HelperError: LocalizedError {
   case stateDiscarded
   case unownedSleepOverride
   case lowBattery
+  case monitorMissing
 
   var errorDescription: String? {
     switch self {
@@ -94,6 +95,8 @@ private enum HelperError: LocalizedError {
       "System sleep is disabled by another process. Awake will not change it."
     case .lowBattery:
       "Awake cannot start while the battery is at or below 20%."
+    case .monitorMissing:
+      "Awake's background service is not running. Run scripts/install-helper.sh to reinstall it."
     }
   }
 }
@@ -224,8 +227,12 @@ private func report(_ error: Error) {
 }
 
 private func refreshMonitor() throws {
-  _ = try run(
-    "/bin/launchctl", ["kill", "SIGUSR1", "system/dev.herdr.AgentAwakeHelper"])
+  do {
+    _ = try run(
+      "/bin/launchctl", ["kill", "SIGUSR1", "system/dev.herdr.AgentAwakeHelper"])
+  } catch {
+    throw HelperError.monitorMissing
+  }
 }
 
 private func notifyMonitor() {
